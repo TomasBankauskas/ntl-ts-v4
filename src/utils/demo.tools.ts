@@ -1,53 +1,10 @@
-import { experimental_createMCPClient, tool } from 'ai'
-//import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { z } from 'zod'
+// NOTE: This file is kept for reference but is not currently used
+// since we removed the Vercel AI SDK and tool support
 
-import guitars from '../data/example-guitars'
-
-// Example of using an SSE MCP server
-// const mcpClient = await experimental_createMCPClient({
-//   transport: {
-//     type: "sse",
-//     url: "http://localhost:8081/sse",
-//   },
-//   name: "Demo Service",
-// });
-
-// Example of using an STDIO MCP server
-// const mcpClient = await experimental_createMCPClient({
-//   transport: new StdioClientTransport({
-//     command: "node",
-//     args: [
-//       "stdio-server.js",
-//     ],
-//   }),
-// });
-
-const getGuitars = tool({
-  description: 'Get all products from the database',
-  inputSchema: z.object({}),
-  execute: async () => {
-    return Promise.resolve(guitars)
-  },
-})
-
-const recommendGuitar = tool({
-  description: 'Use this tool to recommend a guitar to the user',
-  inputSchema: z.object({
-    id: z.string().describe('The id of the guitar to recommend'),
-  }),
-  execute: async ({ id }) => {
-    return {
-      id,
-    }
-  },
-})
+// Tools functionality has been removed with the migration to direct Anthropic SDK
+// If you need to re-implement tools, you'll need to use Anthropic's tool calling API
 
 export default async function getTools() {
-  // const mcpTools = await mcpCient.tools()
-  return {
-    // ...mcpTools,
-    getGuitars,
-    recommendGuitar,
-  }
+  // Placeholder - tools not implemented in current version
+  return {}
 }

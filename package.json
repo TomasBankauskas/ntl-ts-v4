@@ -9,8 +9,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@ai-sdk/anthropic": "^2.0.1",
-    "@ai-sdk/react": "^2.0.8",
+    "@anthropic-ai/sdk": "^0.32.1",
     "@modelcontextprotocol/sdk": "^1.8.0",
     "@netlify/vite-plugin-tanstack-start": "^1.0.2",
     "@tailwindcss/vite": "^4.0.6",
@@ -22,7 +21,6 @@
     "@tanstack/react-store": "^0.7.0",
     "@tanstack/router-plugin": "^1.132.0",
     "@tanstack/store": "^0.7.0",
-    "ai": "^5.0.8",
     "highlight.js": "^11.11.1",
     "lucide-react": "^0.544.0",
     "react": "^19.0.0",

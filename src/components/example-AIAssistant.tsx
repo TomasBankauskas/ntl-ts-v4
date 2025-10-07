@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useCallback } from 'react'
 import { useStore } from '@tanstack/react-store'
 import { Store } from '@tanstack/store'
 
@@ -9,16 +9,21 @@ import rehypeSanitize from 'rehype-sanitize'
 import rehypeHighlight from 'rehype-highlight'
 import remarkGfm from 'remark-gfm'
 
-import { useChat } from '@ai-sdk/react'
-import { DefaultChatTransport } from 'ai'
-
-import GuitarRecommendation from './example-GuitarRecommendation'
-
-import type { UIMessage } from 'ai'
+interface Message {
+  id: string
+  role: 'user' | 'assistant'
+  content: string
+}
 
 export const showAIAssistant = new Store(false)
 
-function Messages({ messages }: { messages: Array<UIMessage> }) {
+function Messages({
+  messages,
+  pendingMessage,
+}: {
+  messages: Array<Message>
+  pendingMessage: Message | null
+}) {
   const messagesContainerRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -26,9 +31,13 @@ function Messages({ messages }: { messages: Array<UIMessage> }) {
       messagesContainerRef.current.scrollTop =
         messagesContainerRef.current.scrollHeight
     }
-  }, [messages])
+  }, [messages, pendingMessage])
 
-  if (!messages.length) {
+  const allMessages = [...messages, pendingMessage].filter(
+    (msg): msg is Message => msg !== null
+  )
+
+  if (!allMessages.length) {
     return (
       <div className="flex-1 flex items-center justify-center text-gray-400 text-sm">
         Ask me anything! I'm here to help.
@@ -38,58 +47,34 @@ function Messages({ messages }: { messages: Array<UIMessage> }) {
 
   return (
     <div ref={messagesContainerRef} className="flex-1 overflow-y-auto">
-      {messages.map(({ id, role, parts }) => (
+      {allMessages.map((message) => (
         <div
-          key={id}
+          key={message.id}
           className={`py-3 ${
-            role === 'assistant'
+            message.role === 'assistant'
               ? 'bg-gradient-to-r from-orange-500/5 to-red-600/5'
               : 'bg-transparent'
           }`}
         >
-          {parts.map((part) => {
-            if (part.type === 'text') {
-              return (
-                <div className="flex items-start gap-2 px-4">
-                  {role === 'assistant' ? (
-                    <div className="w-6 h-6 rounded-lg bg-gradient-to-r from-orange-500 to-red-600 flex items-center justify-center text-xs font-medium text-white flex-shrink-0">
-                      AI
-                    </div>
-                  ) : (
-                    <div className="w-6 h-6 rounded-lg bg-gray-700 flex items-center justify-center text-xs font-medium text-white flex-shrink-0">
-                      Y
-                    </div>
-                  )}
-                  <div className="flex-1 min-w-0">
-                    <ReactMarkdown
-                      className="prose dark:prose-invert max-w-none prose-sm"
-                      rehypePlugins={[
-                        rehypeRaw,
-                        rehypeSanitize,
-                        rehypeHighlight,
-                        remarkGfm,
-                      ]}
-                    >
-                      {part.text}
-                    </ReactMarkdown>
-                  </div>
-                </div>
-              )
-            }
-            if (
-              part.type === 'tool-recommendGuitar' &&
-              part.state === 'output-available' &&
-              (part.output as { id: string })?.id
-            ) {
-              return (
-                <div key={id} className="max-w-[80%] mx-auto">
-                  <GuitarRecommendation
-                    id={(part.output as { id: string })?.id}
-                  />
-                </div>
-              )
-            }
-          })}
+          <div className="flex items-start gap-2 px-4">
+            {message.role === 'assistant' ? (
+              <div className="w-6 h-6 rounded-lg bg-gradient-to-r from-orange-500 to-red-600 flex items-center justify-center text-xs font-medium text-white flex-shrink-0">
+                AI
+              </div>
+            ) : (
+              <div className="w-6 h-6 rounded-lg bg-gray-700 flex items-center justify-center text-xs font-medium text-white flex-shrink-0">
+                Y
+              </div>
+            )}
+            <div className="flex-1 min-w-0 prose dark:prose-invert max-w-none prose-sm">
+              <ReactMarkdown
+                rehypePlugins={[rehypeRaw, rehypeSanitize, rehypeHighlight]}
+                remarkPlugins={[remarkGfm]}
+              >
+                {message.content}
+              </ReactMarkdown>
+            </div>
+          </div>
         </div>
       ))}
     </div>
@@ -98,12 +83,105 @@ function Messages({ messages }: { messages: Array<UIMessage> }) {
 
 export default function AIAssistant() {
   const isOpen = useStore(showAIAssistant)
-  const { messages, sendMessage } = useChat({
-    transport: new DefaultChatTransport({
-      api: '/demo/api/tanchat',
-    }),
-  })
+  const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
+  const [isLoading, setIsLoading] = useState(false)
+  const [pendingMessage, setPendingMessage] = useState<Message | null>(null)
+
+  const handleSubmit = useCallback(
+    async (e: React.FormEvent) => {
+      e.preventDefault()
+      if (!input.trim() || isLoading) return
+
+      const currentInput = input
+      setInput('')
+      setIsLoading(true)
+
+      const userMessage: Message = {
+        id: Date.now().toString(),
+        role: 'user',
+        content: currentInput.trim(),
+      }
+
+      setMessages((prev) => [...prev, userMessage])
+
+      try {
+        const response = await fetch('/demo/api/tanchat', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            messages: [...messages, userMessage],
+          }),
+        })
+
+        if (!response.ok) {
+          throw new Error('Failed to get response')
+        }
+
+        const reader = response.body?.getReader()
+        if (!reader) {
+          throw new Error('No reader found in response')
+        }
+
+        const decoder = new TextDecoder()
+        let done = false
+        let newMessage: Message = {
+          id: (Date.now() + 1).toString(),
+          role: 'assistant',
+          content: '',
+        }
+        let buffer = ''
+
+        while (!done) {
+          const result = await reader.read()
+          done = result.done
+
+          if (!done && result.value) {
+            buffer += decoder.decode(result.value, { stream: true })
+
+            const lines = buffer.split('\n')
+            buffer = lines.pop() || ''
+
+            for (const line of lines) {
+              if (line.trim()) {
+                try {
+                  const json = JSON.parse(line)
+                  if (json.type === 'content_block_delta' && json.delta?.text) {
+                    newMessage = {
+                      ...newMessage,
+                      content: newMessage.content + json.delta.text,
+                    }
+                    setPendingMessage({ ...newMessage })
+                  }
+                } catch (e) {
+                  console.error('Error parsing streaming response:', e)
+                }
+              }
+            }
+          }
+        }
+
+        setPendingMessage(null)
+        if (newMessage.content.trim()) {
+          setMessages((prev) => [...prev, newMessage])
+        }
+      } catch (error) {
+        console.error('Error in chat:', error)
+        const errorMessage: Message = {
+          id: (Date.now() + 1).toString(),
+          role: 'assistant',
+          content:
+            'Sorry, I encountered an error. Please check your API key and try again.',
+        }
+        setMessages((prev) => [...prev, errorMessage])
+      } finally {
+        setIsLoading(false)
+      }
+    },
+    [input, isLoading, messages]
+  )
 
   return (
     <div className="relative z-50">
@@ -132,16 +210,10 @@ export default function AIAssistant() {
             </button>
           </div>
 
-          <Messages messages={messages} />
+          <Messages messages={messages} pendingMessage={pendingMessage} />
 
           <div className="p-3 border-t border-orange-500/20">
-            <form
-              onSubmit={(e) => {
-                e.preventDefault()
-                sendMessage({ text: input })
-                setInput('')
-              }}
-            >
+            <form onSubmit={handleSubmit}>
               <div className="relative">
                 <textarea
                   value={input}
@@ -159,14 +231,13 @@ export default function AIAssistant() {
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' && !e.shiftKey) {
                       e.preventDefault()
-                      sendMessage({ text: input })
-                      setInput('')
+                      handleSubmit(e)
                     }
                   }}
                 />
                 <button
                   type="submit"
-                  disabled={!input.trim()}
+                  disabled={!input.trim() || isLoading}
                   className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-orange-500 hover:text-orange-400 disabled:text-gray-500 transition-colors focus:outline-none"
                 >
                   <Send className="w-4 h-4" />

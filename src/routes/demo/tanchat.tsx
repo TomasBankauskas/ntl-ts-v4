@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useCallback } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
 import { Send } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
@@ -6,14 +6,14 @@ import rehypeRaw from 'rehype-raw'
 import rehypeSanitize from 'rehype-sanitize'
 import rehypeHighlight from 'rehype-highlight'
 import remarkGfm from 'remark-gfm'
-import { useChat } from '@ai-sdk/react'
-import { DefaultChatTransport } from 'ai'
-
-import type { UIMessage } from 'ai'
-
-import GuitarRecommendation from '@/components/example-GuitarRecommendation'
 
 import './tanchat.css'
+
+interface Message {
+  id: string
+  role: 'user' | 'assistant'
+  content: string
+}
 
 function InitalLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -40,7 +40,13 @@ function ChattingLayout({ children }: { children: React.ReactNode }) {
   )
 }
 
-function Messages({ messages }: { messages: Array<UIMessage> }) {
+function Messages({
+  messages,
+  pendingMessage,
+}: {
+  messages: Array<Message>
+  pendingMessage: Message | null
+}) {
   const messagesContainerRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -48,26 +54,30 @@ function Messages({ messages }: { messages: Array<UIMessage> }) {
       messagesContainerRef.current.scrollTop =
         messagesContainerRef.current.scrollHeight
     }
-  }, [messages])
+  }, [messages, pendingMessage])
 
-  if (!messages.length) {
+  const allMessages = [...messages, pendingMessage].filter(
+    (msg): msg is Message => msg !== null
+  )
+
+  if (!allMessages.length) {
     return null
   }
 
   return (
     <div ref={messagesContainerRef} className="flex-1 overflow-y-auto pb-24">
       <div className="max-w-3xl mx-auto w-full px-4">
-        {messages.map(({ id, role, parts }) => (
+        {allMessages.map((message) => (
           <div
-            key={id}
+            key={message.id}
             className={`p-4 ${
-              role === 'assistant'
+              message.role === 'assistant'
                 ? 'bg-gradient-to-r from-orange-500/5 to-red-600/5'
                 : 'bg-transparent'
             }`}
           >
             <div className="flex items-start gap-4 max-w-3xl mx-auto w-full">
-              {role === 'assistant' ? (
+              {message.role === 'assistant' ? (
                 <div className="w-8 h-8 rounded-lg bg-gradient-to-r from-orange-500 to-red-600 mt-2 flex items-center justify-center text-sm font-medium text-white flex-shrink-0">
                   AI
                 </div>
@@ -76,39 +86,13 @@ function Messages({ messages }: { messages: Array<UIMessage> }) {
                   Y
                 </div>
               )}
-              <div className="flex-1">
-                {parts.map((part, index) => {
-                  if (part.type === 'text') {
-                    return (
-                      <div className="flex-1 min-w-0" key={index}>
-                        <ReactMarkdown
-                          className="prose dark:prose-invert max-w-none"
-                          rehypePlugins={[
-                            rehypeRaw,
-                            rehypeSanitize,
-                            rehypeHighlight,
-                            remarkGfm,
-                          ]}
-                        >
-                          {part.text}
-                        </ReactMarkdown>
-                      </div>
-                    )
-                  }
-                  if (
-                    part.type === 'tool-recommendGuitar' &&
-                    part.state === 'output-available' &&
-                    (part.output as { id: string })?.id
-                  ) {
-                    return (
-                      <div key={index} className="max-w-[80%] mx-auto">
-                        <GuitarRecommendation
-                          id={(part.output as { id: string })?.id}
-                        />
-                      </div>
-                    )
-                  }
-                })}
+              <div className="flex-1 min-w-0 prose dark:prose-invert max-w-none">
+                <ReactMarkdown
+                  rehypePlugins={[rehypeRaw, rehypeSanitize, rehypeHighlight]}
+                  remarkPlugins={[remarkGfm]}
+                >
+                  {message.content}
+                </ReactMarkdown>
               </div>
             </div>
           </div>
@@ -119,28 +103,120 @@ function Messages({ messages }: { messages: Array<UIMessage> }) {
 }
 
 function ChatPage() {
-  const { messages, sendMessage } = useChat({
-    transport: new DefaultChatTransport({
-      api: '/demo/api/tanchat',
-    }),
-  })
+  const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
+  const [isLoading, setIsLoading] = useState(false)
+  const [pendingMessage, setPendingMessage] = useState<Message | null>(null)
+
+  const handleSubmit = useCallback(
+    async (e: React.FormEvent) => {
+      e.preventDefault()
+      if (!input.trim() || isLoading) return
+
+      const currentInput = input
+      setInput('')
+      setIsLoading(true)
+
+      // Create user message
+      const userMessage: Message = {
+        id: Date.now().toString(),
+        role: 'user',
+        content: currentInput.trim(),
+      }
+
+      // Add user message to state
+      setMessages((prev) => [...prev, userMessage])
+
+      try {
+        // Call API
+        const response = await fetch('/demo/api/tanchat', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            messages: [...messages, userMessage],
+          }),
+        })
+
+        if (!response.ok) {
+          throw new Error('Failed to get response')
+        }
+
+        const reader = response.body?.getReader()
+        if (!reader) {
+          throw new Error('No reader found in response')
+        }
+
+        const decoder = new TextDecoder()
+        let done = false
+        let newMessage: Message = {
+          id: (Date.now() + 1).toString(),
+          role: 'assistant',
+          content: '',
+        }
+        let buffer = ''
+
+        while (!done) {
+          const result = await reader.read()
+          done = result.done
+
+          if (!done && result.value) {
+            buffer += decoder.decode(result.value, { stream: true })
+
+            // Split by newlines to get complete JSON objects
+            const lines = buffer.split('\n')
+            buffer = lines.pop() || ''
+
+            for (const line of lines) {
+              if (line.trim()) {
+                try {
+                  const json = JSON.parse(line)
+                  if (json.type === 'content_block_delta' && json.delta?.text) {
+                    newMessage = {
+                      ...newMessage,
+                      content: newMessage.content + json.delta.text,
+                    }
+                    setPendingMessage({ ...newMessage })
+                  }
+                } catch (e) {
+                  console.error('Error parsing streaming response:', e)
+                }
+              }
+            }
+          }
+        }
+
+        // Add final message to state
+        setPendingMessage(null)
+        if (newMessage.content.trim()) {
+          setMessages((prev) => [...prev, newMessage])
+        }
+      } catch (error) {
+        console.error('Error in chat:', error)
+        const errorMessage: Message = {
+          id: (Date.now() + 1).toString(),
+          role: 'assistant',
+          content:
+            'Sorry, I encountered an error. Please check your API key and try again.',
+        }
+        setMessages((prev) => [...prev, errorMessage])
+      } finally {
+        setIsLoading(false)
+      }
+    },
+    [input, isLoading, messages]
+  )
 
   const Layout = messages.length ? ChattingLayout : InitalLayout
 
   return (
     <div className="relative flex h-[calc(100vh-32px)] bg-gray-900">
       <div className="flex-1 flex flex-col">
-        <Messages messages={messages} />
+        <Messages messages={messages} pendingMessage={pendingMessage} />
 
         <Layout>
-          <form
-            onSubmit={(e) => {
-              e.preventDefault()
-              sendMessage({ text: input })
-              setInput('')
-            }}
-          >
+          <form onSubmit={handleSubmit}>
             <div className="relative max-w-xl mx-auto">
               <textarea
                 value={input}
@@ -158,14 +234,13 @@ function ChatPage() {
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault()
-                    sendMessage({ text: input })
-                    setInput('')
+                    handleSubmit(e)
                   }
                 }}
               />
               <button
                 type="submit"
-                disabled={!input.trim()}
+                disabled={!input.trim() || isLoading}
                 className="absolute right-2 top-1/2 -translate-y-1/2 p-2 text-orange-500 hover:text-orange-400 disabled:text-gray-500 transition-colors focus:outline-none"
               >
                 <Send className="w-4 h-4" />
